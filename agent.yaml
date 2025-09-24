@@ -1,0 +1,284 @@
+include:
+  - core/tools/create-chat-message.yaml
+  - core/tools/batch-create-messages.yaml
+  - core/tools/create-document.yaml
+  - core/tools/create-mock.yaml
+  - core/tools/debug.yaml
+  - examples/examples-workspace.yaml
+  - llm/tools/extract-tags.yaml
+  - examples/code/refactoring-agent/tools.yaml
+  - examples/code/refactoring-agent/documents.yaml
+
+pipelines:
+  - name: simple_clone_read
+    title: 'Refactoring Agent Pipeline'
+    type: root
+    workspace: examples
+    sequence:
+      - workflow: setup_mock_data
+      - workflow: clone_repository
+      - workflow: read_main_file
+      - workflow: analyze_dependencies
+      - workflow: suggest_improvements
+workflows:
+  - name: setup_mock_data
+    title: 'Setup Mock Configuration'
+    type: stateMachine
+    transitions:
+      - name: create_mock_values
+        from: start
+        to: end
+        call:
+          - tool: create_mock
+            arguments:
+              output: 'src/userService.js'
+            exportContext: SOURCE_FILE
+
+          - tool: create_mock
+            arguments:
+              output: 'https://github.com/TobeyTG/test'
+            exportContext: REPO_URL
+
+          - tool: create_mock
+            arguments:
+              output: 'cloned_repo'
+            exportContext: TARGET_DIR
+
+  - name: clone_repository
+    title: 'Clone Repository'
+    type: stateMachine
+    transitions:
+      - name: start_clone
+        from: start
+        to: cloning
+        call:
+          - tool: create_chat_message
+            arguments:
+              role: assistant
+              content: 'Starting clone of {{ context.variables.REPO_URL }}...'
+
+      - name: execute_clone
+        from: cloning
+        to: clone_completed
+        call:
+          - tool: git_clone_tool
+            arguments:
+              repo_url: ${ context.variables.REPO_URL }
+              target_dir: ${ context.variables.TARGET_DIR }
+            as: CLONE_RESULT
+
+      - name: confirm_clone
+        from: clone_completed
+        to: end
+        call:
+          - tool: create_chat_message
+            arguments:
+              role: assistant
+              content: 'Clone completed. Now reading {{ context.variables.SOURCE_FILE }}...'
+
+  - name: read_main_file
+    title: 'Read Main File'
+    type: stateMachine
+    transitions:
+      - name: debug_file_path
+        from: start
+        to: path_prepared
+        call:
+          - tool: debug
+            arguments:
+              value: '{{ context.variables.TARGET_DIR }}/{{ context.variables.SOURCE_FILE }}'
+
+      - name: read_source_file
+        from: path_prepared
+        to: file_read
+        call:
+          - tool: read_file_tool
+            arguments:
+              file_path: '{{ context.variables.TARGET_DIR }}/{{ context.variables.SOURCE_FILE }}'
+            as: FILE_RESULT
+
+      - name: display_file_content
+        from: file_read
+        to: tag_extraction_setup
+        call:
+          - tool: create_chat_message
+            arguments:
+              role: assistant
+              content: |
+                ## 📄 Main File Content:
+                ```javascript
+                {{ FILE_RESULT.content }}
+                ```
+
+      - name: create_mock_content
+        from: tag_extraction_setup
+        to: tags_extracted
+        call:
+          - tool: create_mock
+            arguments:
+              output: |
+                <Path>
+                the/path...
+                </Path>
+                <Content>
+                this is the file content
+                </Content>
+            as: NEW_CONTENT
+
+      - name: extract_tags
+        from: tags_extracted
+        to: content_extracted
+        call:
+          - tool: extract_tags
+            arguments:
+              source: ${ NEW_CONTENT }
+              tags:
+                - Path
+                - Content
+            as: EXTRACTED
+
+      - name: debug_extracted_content
+        from: content_extracted
+        to: end
+        call:
+          - tool: debug
+            arguments:
+              value: ${ EXTRACTED.Content }
+
+          - tool: create_mock
+            arguments:
+              output: ${ FILE_RESULT }
+            exportContext: FILE_RESULT
+
+  - name: analyze_dependencies
+    title: 'Analyze Dependencies'
+    type: stateMachine
+    transitions:
+      - name: start_dependency_analysis
+        from: start
+        to: analyzing
+        call:
+          - tool: create_chat_message
+            arguments:
+              role: assistant
+              content: '🔍 Analyzing dependencies...'
+
+      - name: run_ai_analysis
+        from: analyzing
+        to: dependencies_found
+        call:
+          - tool: analyze_dependencies_ai_tool
+            arguments:
+              file_content: ${ context.variables.FILE_RESULT.content }
+              file_path: '{{ context.variables.TARGET_DIR }}/{{ context.variables.SOURCE_FILE }}'
+              document: dependencies_document
+            as: DEPENDENCIES
+
+      - name: debug_dependencies
+        from: dependencies_found
+        to: files_loaded
+        call:
+          - tool: debug
+            arguments:
+              value: ${ DEPENDENCIES.object.file_paths }
+
+      - name: read_dependency_files
+        from: files_loaded
+        to: end
+        call:
+          - tool: read_multiple_files_tool
+            arguments:
+              file_paths: ${ DEPENDENCIES.object.file_paths }
+            as: OTHER_FILES
+
+          - tool: debug
+            arguments:
+              value: ${ OTHER_FILES }
+
+          - tool: create_mock
+            arguments:
+              output: ${ OTHER_FILES }
+            exportContext: OTHER_FILES
+
+  - name: suggest_improvements
+    title: 'Suggest Code Improvements'
+    type: stateMachine
+    transitions:
+      - name: start_improvement_analysis
+        from: start
+        to: analyzing_code
+        call:
+          - tool: create_chat_message
+            arguments:
+              role: assistant
+              content: '💡 Analyzing code for improvements...'
+
+      - name: run_code_analysis
+        from: analyzing_code
+        to: improvements_generated
+        call:
+          - tool: code_improver_agent
+            arguments:
+              file_content: ${ context.variables.FILE_RESULT.content }
+              dependant_file_contents: ${ context.variables.OTHER_FILES.results }
+              file_path: '{{ context.variables.TARGET_DIR }}/{{ context.variables.SOURCE_FILE }}'
+              target_directory: '{{ context.variables.TARGET_DIR }}'
+            as: IMPROVEMENTS
+
+      - name: debug_improvements
+        from: improvements_generated
+        to: results_displayed
+        call:
+          - tool: debug
+            arguments:
+              value: ${ IMPROVEMENTS.object.edits }
+
+      - name: display_improvements_table
+        from: results_displayed
+        to: waiting_for_approval
+        call:
+          - tool: create_chat_message
+            arguments:
+              role: assistant
+              content: |
+                | File | Line Number | Old Code | Improved Code |
+                |------|------------|----------|---------------|
+                {{#each IMPROVEMENTS.object.edits }}
+                | {{ this.file_name }} | {{ this.line_number }} | `{{ this.old_text }}` | `{{ this.new_text }}` |
+                {{/each}}
+
+          - tool: create_document
+            arguments:
+              document: approval_form
+              content:
+                improvements: ${ IMPROVEMENTS.object.edits }
+                total_improvements: ${ IMPROVEMENTS.object.edits.length }
+
+          - tool: create_chat_message
+            arguments:
+              role: assistant
+              content: |
+                📋 **Review the improvements above.**
+
+                You can:
+                - Delete the Improvements you don't want to apply.
+                - The Rest will be applied automatically when you approve.
+
+      - name: approve_improvements
+        from: waiting_for_approval
+        to: approved
+        when: manual
+        call:
+          - tool: create_chat_message
+            arguments:
+              role: assistant
+              content: |
+                ✅ **Improvements Approved!**
+                Writing changes to files...
+          - tool: debug
+            arguments:
+              value: ${ transition.payload.improvements }
+
+          - tool: write_improvements_tool
+            arguments:
+              files: ${ transition.payload.improvements }

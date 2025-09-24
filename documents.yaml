@@ -1,0 +1,91 @@
+documents:
+  - name: dependencies_document
+    schema:
+      type: object
+      properties:
+        file_paths:
+          type: array
+          items:
+            type: string
+
+  - name: improvements_document
+    schema:
+      type: object
+      properties:
+        edits:
+          type: array
+          items:
+            type: object
+            properties:
+              line_number:
+                type: number
+              old_text:
+                type: string
+              new_text:
+                type: string
+              file_path:
+                type: string
+              file_name:
+                type: string
+              new_content:
+                type: string
+            required:
+              - line_number
+              - old_text
+              - new_text
+              - file_path
+              - file_name
+              - new_content
+
+  - name: approval_form
+    title: 'Code Improvement Approval'
+    schema:
+      type: object
+      properties:
+        improvements:
+          type: array
+          items:
+            type: object
+            properties:
+              file_name:
+                type: string
+              line_number:
+                type: number
+              old_text:
+                type: string
+              new_text:
+                type: string
+              new_content:
+                type: string
+        total_improvements:
+          type: number
+    ui:
+      properties:
+        improvements:
+          widget: array
+          title: 'Code Improvements'
+          items:
+            properties:
+              file_name:
+                widget: input
+                title: 'File'
+                readonly: true
+              line_number:
+                widget: number
+                title: 'Line'
+                readonly: true
+              old_text:
+                widget: textarea
+                title: 'Current Code'
+                readonly: true
+              new_text:
+                widget: label
+                title: 'Improved Code'
+                readonly: true
+              new_content:
+                hidden: true
+                title: 'New Content'
+      buttons:
+        - transition: approve_improvements
+          label: '✅ Apply Improvements'
+          variant: primary
