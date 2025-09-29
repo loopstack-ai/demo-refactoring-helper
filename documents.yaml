@@ -12,30 +12,73 @@ documents:
     schema:
       type: object
       properties:
+        files:
+          type: array
+          items:
+            type: object
+            properties:
+              file_path:
+                type: string
+              file_name:
+                type: string
+              content:
+                type: string
         edits:
           type: array
           items:
             type: object
             properties:
+              file_path:
+                type: string
+              file_name:
+                type: string
               line_number:
                 type: number
               old_text:
                 type: string
               new_text:
                 type: string
+
+  - name: merged_files_document
+    schema:
+      type: object
+      properties:
+        commit_message:
+          type: string
+        files:
+          type: array
+          items:
+            type: object
+            properties:
               file_path:
-                type: string
-              file_name:
                 type: string
               new_content:
                 type: string
+              edits_applied:
+                type: number
+              edits_skipped:
+                type: array
+                items:
+                  type: object
+                  properties:
+                    line_number:
+                      type: number
+                    old_text:
+                      type: string
+                    new_text:
+                      type: string
+                    reason:
+                      type: string
+                  required:
+                    - line_number
+                    - old_text
+                    - new_text
+                    - reason
             required:
-              - line_number
-              - old_text
-              - new_text
               - file_path
-              - file_name
               - new_content
+              - edits_applied
+              - edits_skipped
 
   - name: approval_form
     title: 'Code Improvement Approval'
@@ -54,8 +97,6 @@ documents:
               old_text:
                 type: string
               new_text:
-                type: string
-              new_content:
                 type: string
         total_improvements:
           type: number

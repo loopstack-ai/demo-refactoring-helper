@@ -1,0 +1,126 @@
+tools:
+  - name: git_clone_tool
+    parameters:
+      type: object
+      properties:
+        repo_url:
+          type: string
+          description: 'Repository URL to clone'
+        target_dir:
+          type: string
+          description: 'Target directory name'
+      required:
+        - repo_url
+        - target_dir
+    execute:
+      - handler: GitHandler
+        arguments:
+          action: 'clone'
+          repo_url: ${ arguments.repo_url }
+          target_dir: ${ arguments.target_dir }
+          github_token: ${ context.variables.GITHUB_TOKEN }
+          author_name: 'Refactoring Bot'
+          author_email: 'team@loopstack.ai'
+
+  - name: git_checkout_branch_tool
+    parameters:
+      type: object
+      properties:
+        branch_name:
+          type: string
+          description: 'Name of the branch to create and checkout'
+        repo_dir:
+          type: string
+          description: 'Directory containing the git repository'
+      required:
+        - branch_name
+        - repo_dir
+    execute:
+      - handler: GitHandler
+        arguments:
+          action: 'checkout'
+          branch: ${ arguments.branch_name }
+          target_dir: ${ arguments.repo_dir }
+          author_name: 'Refactoring Bot'
+          author_email: 'team@loopstack.ai'
+
+  - name: git_commit_tool
+    parameters:
+      type: object
+      properties:
+        message:
+          type: string
+          description: 'Commit message'
+        repo_dir:
+          type: string
+          description: 'Directory containing the git repository'
+      required:
+        - message
+        - repo_dir
+    execute:
+      - handler: GitHandler
+        arguments:
+          action: 'commit'
+          commit_message: ${ arguments.message }
+          target_dir: ${ arguments.repo_dir }
+          author_name: 'Refactoring Bot'
+          author_email: 'team@loopstack.ai'
+          branch: 'main'
+
+  - name: git_push_tool
+    parameters:
+      type: object
+      properties:
+        branch_name:
+          type: string
+          description: 'Name of the branch to push'
+        repo_dir:
+          type: string
+          description: 'Directory containing the git repository'
+      required:
+        - branch_name
+        - repo_dir
+    execute:
+      - handler: GitHandler
+        arguments:
+          action: 'push'
+          branch: ${ arguments.branch_name }
+          target_dir: ${ arguments.repo_dir }
+          author_name: 'Refactoring Bot'
+          author_email: 'team@loopstack.ai'
+          github_token: ${ context.variables.GITHUB_TOKEN }
+
+  - name: create_pull_request_tool
+    parameters:
+      type: object
+      properties:
+        title:
+          type: string
+          description: 'Title for the pull request'
+        description:
+          type: string
+          description: 'Description for the pull request'
+        branch_name:
+          type: string
+          description: 'Source branch name'
+        base_branch:
+          type: string
+          description: 'Target branch name (default: main)'
+        repo_dir:
+          type: string
+          description: 'Directory containing the git repository'
+      required:
+        - title
+        - description
+        - branch_name
+        - repo_dir
+    execute:
+      - handler: GitHandler
+        arguments:
+          action: 'create_pr'
+          title: ${ arguments.title }
+          description: ${arguments.description}
+          branch_name: ${ arguments.branch_name }
+          base_branch: ${ arguments.base_branch }
+          target_dir: ${ arguments.repo_dir }
+          github_token: ${ context.variables.GITHUB_TOKEN }

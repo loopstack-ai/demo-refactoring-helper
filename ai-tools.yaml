@@ -1,0 +1,280 @@
+tools:
+  - name: read_file_tool
+    parameters:
+      type: object
+      properties:
+        file_path:
+          type: string
+          description: 'Path to the file to read'
+      required:
+        - file_path
+    execute:
+      - handler: FileReadHandler
+        arguments:
+          file_name: ${ arguments.file_path }
+
+  - name: read_multiple_files_tool
+    parameters:
+      type: object
+      properties:
+        file_paths:
+          type: array
+          items:
+            type: string
+      required:
+        - file_paths
+    execute:
+      - handler: BatchFileReadHandler
+        arguments:
+          file_names: ${ arguments.file_paths }
+
+  - name: analyze_dependencies_ai_tool
+    description: 'AI analyzes code and identifies dependency files'
+    parameters:
+      type: object
+      properties:
+        file_content:
+          type: string
+        file_path:
+          type: string
+        document:
+          type: string
+      required:
+        - file_content
+        - file_path
+    execute:
+      - handler: AiGenerateObjectHandler
+        arguments:
+          llm:
+            provider: openai
+            model: gpt-4o
+          responseDocument: ${ arguments.document }
+          messages:
+            - role: system
+              content: |
+                You are a code dependency analyzer. Given a JavaScript/TypeScript file, identify all import statements and return ONLY file paths that need to be loaded.
+
+                Rules:
+                - Only return local file imports (not npm packages)
+                - Return file paths relative to the cloned repository directory (e.g., 'cloned_repo/path/to/file.js').
+                - Use the provided <FILE_PATH> as the source file's location to resolve relative imports.
+                - ALWAYS include proper file extensions (.js, .ts, .jsx, .tsx, .mjs, .cjs)
+                - If an import doesn't have an extension, try to infer it based on the project context
+                - For directory imports (like './types'), assume index files: './types/index.ts' or './types/index.js'
+                - Return ONLY JSON output (no extra text or commentary).
+                - If no dependencies found, return an empty array in `file_path`.
+
+            - role: user
+              content: |
+                <FILE_PATH>
+                {{ arguments.file_path }} 
+                <FILE_PATH>
+
+                <FILE_CONTENT>
+                {{ arguments.file_content }}
+                <FILE_CONTENT>
+
+  - name: code_improver_agent
+    description: 'AI agent that analyzes code and suggests improvements as line edits in JSON format'
+    parameters:
+      type: object
+      properties:
+        file_content:
+          type: string
+        dependant_file_contents:
+          type: array
+          items:
+            type: object
+            properties:
+              content:
+                type: string
+              containerPath:
+                type: string
+        file_path:
+          type: string
+        target_directory:
+          type: string
+          description: 'Name of the target directory (e.g., "cloned_repo")'
+      required:
+        - file_content
+        - dependant_file_contents
+        - file_path
+        - target_directory
+    execute:
+      - handler: AiGenerateObjectHandler
+        arguments:
+          llm:
+            provider: openai
+            model: gpt-4o
+          responseDocument: improvements_document
+          messages:
+            - role: system
+              content: |
+                You are a code improvement agent. Analyze the provided JavaScript/TypeScript code and its dependent files, then suggest specific line edits for improvements such as better variable names, code structure, performance, or best practices for ALL files.
+
+                CRITICAL: Preserve all line breaks and formatting in the content field!
+
+                Important guidelines for edits:
+                - NEVER use empty strings ("") for old_text or new_text. If you need to represent an empty replacement, use a single space character (" ") instead.
+                - Calculate line numbers accurately based on the provided file content, accounting for all line breaks (\n). Line numbers are 1-based and reset to 1 for each new file analyzed.
+                - Ensure old_text matches the exact text (including whitespace and indentation) to be replaced.
+                - new_text should include proper indentation and line breaks to maintain code structure.
+                - PRESERVE original line breaks in content - do NOT remove \n characters!
+                - To ensure the output can be properly formatted as a Markdown table, replace any pipes (|) in old_text and new_text with escaped pipes (\|), replace any newlines (\n) with spaces, replace any dollar signs ($) with escaped dollars (\$), replace any opening parentheses (() with escaped (\(), and replace any closing parentheses ()) with escaped (\)).
+                - For file_path, always normalize to start with "{{ arguments.target_directory }}/" regardless of container paths shown in dependent files
+
+                Return ONLY a JSON object with:
+                - "files": array of objects, each containing:
+                  - file_path: string (RELATIVE path from root directory, e.g., "{{ arguments.target_directory }}/src/userService.js" - NO leading slash)
+                  - file_name: string (the name of the file being edited e.g., "userService.js")
+                  - content: string (the full content of the file before edits, PRESERVE all line breaks and formatting)
+                - "edits": array of objects, each containing:
+                  - file_path: string (RELATIVE path from root directory, e.g., "{{ arguments.target_directory }}/src/userService.js" - NO leading slash)
+                  - file_name: string (the name of the file being edited e.g., "userService.js")
+                  - line_number: integer (1-based, accurately calculated)
+                  - old_text: string (exact text to replace, never empty - use " " if needed, with pipes, dollars, parentheses, and newlines escaped/replaced)
+                  - new_text: string (replacement text, never empty - use " " if needed, with pipes, dollars, parentheses, and newlines escaped/replaced)
+
+                Path normalization rules:
+                - Main file path: Use exactly as provided in FILE_PATH
+                - Dependent file paths: Extract the relative path starting from "{{ arguments.target_directory }}/" 
+                - Example: "out/{{ arguments.target_directory }}/src/utils/validation.js" → "{{ arguments.target_directory }}/src/utils/validation.js"
+
+                Only suggest edits that are clearly beneficial. If no improvements needed, return empty arrays for both files and edits.
+
+            - role: user
+              content: |
+                <FILE_PATH>
+                {{ arguments.file_path }}
+                </FILE_PATH>
+
+                <FILE_CONTENT>
+                {{ arguments.file_content }}
+                </FILE_CONTENT>
+
+                <DEPENDENT_FILES>
+
+                {{#each arguments.dependant_file_contents}}
+                <PATH>{{ this.containerPath }}</PATH>
+                <DEPENDENT_FILE>
+                {{ this.content }}
+                </DEPENDENT_FILE>
+                {{/each}}
+                </DEPENDENT_FILES>
+
+  - name: code_merge_agent
+    description: 'AI agent that merges suggested code improvements into final file contents'
+    parameters:
+      type: object
+      properties:
+        files:
+          type: array
+          items:
+            type: object
+            properties:
+              file_path:
+                type: string
+              file_name:
+                type: string
+              content:
+                type: string
+        edits:
+          type: array
+          items:
+            type: object
+            properties:
+              file_path:
+                type: string
+              line_number:
+                type: number
+              old_text:
+                type: string
+              new_text:
+                type: string
+      required:
+        - files
+        - edits
+    execute:
+      - handler: AiGenerateObjectHandler
+        arguments:
+          llm:
+            provider: openai
+            model: gpt-4o
+          responseDocument: merged_files_document
+          messages:
+            - role: system
+              content: |
+                You are a code merge specialist. Your task is to apply a series of line-by-line edits to source files and return the complete updated file contents.
+
+                You will receive:
+                - files: array of objects, each with file_path, file_name, content (original file content)
+                - edits: array of objects, each with file_path, line_number, old_text, new_text
+
+                CRITICAL MERGE RULES:
+                1. Apply ALL edits for each file in the correct order (by line number, top to bottom)
+                2. When applying multiple edits to the same file, work sequentially through the edits
+                3. Account for line number changes as you apply edits (inserting/deleting lines affects subsequent line numbers)
+                4. Preserve all original formatting, indentation, and line breaks unless specifically being changed by an edit
+                5. Ensure old_text matches exactly in the file before replacing with new_text
+                6. Handle edge cases like edits at the beginning/end of files gracefully
+
+                ERROR HANDLING:
+                - If old_text cannot be found at the specified line_number, skip that edit and note the issue
+                - If multiple edits conflict (overlap), apply them in order and handle conflicts intelligently
+                - Preserve file integrity - never corrupt the file structure
+
+                Return ONLY a JSON object with a "files" array. Each file entry should have:
+                - file_path: string (the path to the updated file)
+                - new_content: string (the complete updated file content with all edits applied)
+                - edits_applied: integer (number of successful edits applied)
+                - edits_skipped: array of objects with failed edits and reasons (if any)
+                - commit_message: string (a summary of changes made)
+
+                If no edits are provided or all edits fail, return the original content unchanged.
+
+            - role: user
+              content: |
+                Please apply the following edits to their respective files:
+
+                <FILES>
+                {{#each arguments.files}}
+                <FILE>
+                Path: {{ this.file_path }}
+                Name: {{ this.file_name }}
+                Content:
+                {{ this.content }}
+                </FILE>
+                {{/each}}
+                </FILES>
+
+                <EDITS>
+                {{#each arguments.edits}}
+                <EDIT>
+                File: {{ this.file_path }}
+                Line: {{ this.line_number }}
+                Old: {{ this.old_text }}
+                New: {{ this.new_text }}
+                </EDIT>
+                {{/each}}
+                </EDITS>
+
+  - name: write_improvements_tool
+    parameters:
+      type: object
+      properties:
+        files:
+          type: array
+          items:
+            type: object
+            properties:
+              file_path:
+                type: string
+              new_content:
+                type: string
+
+      required:
+        - files
+    execute:
+      - handler: BatchFileWriteHandler
+        arguments:
+          files: ${ arguments.files }

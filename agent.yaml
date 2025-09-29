@@ -6,7 +6,8 @@ include:
   - core/tools/debug.yaml
   - examples/examples-workspace.yaml
   - llm/tools/extract-tags.yaml
-  - examples/code/refactoring-agent/tools.yaml
+  - examples/code/refactoring-agent/git-tools.yaml
+  - examples/code/refactoring-agent/ai-tools.yaml
   - examples/code/refactoring-agent/documents.yaml
 
 pipelines:
@@ -20,6 +21,8 @@ pipelines:
       - workflow: read_main_file
       - workflow: analyze_dependencies
       - workflow: suggest_improvements
+      - workflow: merge_and_apply_improvements
+      - workflow: git_operations
 workflows:
   - name: setup_mock_data
     title: 'Setup Mock Configuration'
@@ -43,6 +46,11 @@ workflows:
             arguments:
               output: 'cloned_repo'
             exportContext: TARGET_DIR
+
+          - tool: create_mock
+            arguments:
+              output: 'YOUR_KEY'
+            exportContext: GITHUB_TOKEN
 
   - name: clone_repository
     title: 'Clone Repository'
@@ -96,10 +104,11 @@ workflows:
             arguments:
               file_path: '{{ context.variables.TARGET_DIR }}/{{ context.variables.SOURCE_FILE }}'
             as: FILE_RESULT
+            exportContext: FILE_RESULT
 
       - name: display_file_content
         from: file_read
-        to: tag_extraction_setup
+        to: end
         call:
           - tool: create_chat_message
             arguments:
@@ -109,46 +118,6 @@ workflows:
                 ```javascript
                 {{ FILE_RESULT.content }}
                 ```
-
-      - name: create_mock_content
-        from: tag_extraction_setup
-        to: tags_extracted
-        call:
-          - tool: create_mock
-            arguments:
-              output: |
-                <Path>
-                the/path...
-                </Path>
-                <Content>
-                this is the file content
-                </Content>
-            as: NEW_CONTENT
-
-      - name: extract_tags
-        from: tags_extracted
-        to: content_extracted
-        call:
-          - tool: extract_tags
-            arguments:
-              source: ${ NEW_CONTENT }
-              tags:
-                - Path
-                - Content
-            as: EXTRACTED
-
-      - name: debug_extracted_content
-        from: content_extracted
-        to: end
-        call:
-          - tool: debug
-            arguments:
-              value: ${ EXTRACTED.Content }
-
-          - tool: create_mock
-            arguments:
-              output: ${ FILE_RESULT }
-            exportContext: FILE_RESULT
 
   - name: analyze_dependencies
     title: 'Analyze Dependencies'
@@ -231,7 +200,7 @@ workflows:
         call:
           - tool: debug
             arguments:
-              value: ${ IMPROVEMENTS.object.edits }
+              value: ${ IMPROVEMENTS.object }
 
       - name: display_improvements_table
         from: results_displayed
@@ -266,7 +235,7 @@ workflows:
 
       - name: approve_improvements
         from: waiting_for_approval
-        to: approved
+        to: end
         when: manual
         call:
           - tool: create_chat_message
@@ -274,11 +243,179 @@ workflows:
               role: assistant
               content: |
                 ✅ **Improvements Approved!**
-                Writing changes to files...
+                Preparing to merge changes...
+
+          - tool: create_mock
+            arguments:
+              output: ${ transition.payload.improvements }
+            exportContext: APPROVED_IMPROVEMENTS
+
+          - tool: create_mock
+            arguments:
+              output: ${ IMPROVEMENTS.object.files }
+            exportContext: IMPROVEMENT_FILES
+
+  - name: merge_and_apply_improvements
+    title: 'Merge and Apply Code Improvements'
+    type: stateMachine
+    transitions:
+      - name: start_merge
+        from: start
+        to: merging
+        call:
+          - tool: create_chat_message
+            arguments:
+              role: assistant
+              content: '🔀 Merging approved improvements...'
+
+      - name: execute_merge
+        from: merging
+        to: merge_completed
+        call:
+          - tool: code_merge_agent
+            arguments:
+              files: ${ context.variables.IMPROVEMENT_FILES }
+              edits: ${ context.variables.APPROVED_IMPROVEMENTS }
+            as: MERGED_FILES
+
+      - name: debug_merged_results
+        from: merge_completed
+        to: write_files
+        call:
           - tool: debug
             arguments:
-              value: ${ transition.payload.improvements }
+              value: ${ MERGED_FILES.object.files }
 
+      - name: write_merged_files
+        from: write_files
+        to: end
+        call:
           - tool: write_improvements_tool
             arguments:
-              files: ${ transition.payload.improvements }
+              files: ${ MERGED_FILES.object.files }
+            as: WRITE_RESULT
+
+          - tool: create_chat_message
+            arguments:
+              role: assistant
+              content: |
+                ✅ **Files Updated Successfully!**
+
+                {{#each MERGED_FILES.object.files}}
+                📁 **{{ this.file_path }}**
+                - ✅ Applied {{ this.edits_applied }} improvements
+                {{#if this.edits_skipped.length}}
+                - ⚠️ Skipped {{ this.edits_skipped.length }} edits:
+                {{#each this.edits_skipped}}
+                  - Line {{ this.line_number }}: {{ this.reason }}
+                {{/each}}
+                {{/if}}
+                {{/each}}
+
+  - name: git_operations
+    title: 'Git Operations - Branch, Commit, Push, PR'
+    type: stateMachine
+    transitions:
+      - name: start_git_operations
+        from: start
+        to: creating_branch
+        call:
+          - tool: create_chat_message
+            arguments:
+              role: assistant
+              content: '🌿 Creating new branch for refactoring changes...'
+
+      - name: create_and_checkout_branch
+        from: creating_branch
+        to: branch_created
+        call:
+          - tool: git_checkout_branch_tool
+            arguments:
+              branch_name: 'refactor/code-improvements'
+              repo_dir: '{{ context.variables.TARGET_DIR }}'
+            as: BRANCH_RESULT
+
+          - tool: create_mock
+            arguments:
+              output: 'refactor/code-improvements'
+            exportContext: BRANCH_NAME
+
+      - name: commit_changes
+        from: branch_created
+        to: changes_committed
+        call:
+          - tool: create_chat_message
+            arguments:
+              role: assistant
+              content: '📝 Committing refactored code changes...'
+
+          - tool: git_commit_tool
+            arguments:
+              message: |
+                refactor: apply AI-suggested code improvements
+
+                Applied {{ context.variables.APPROVED_IMPROVEMENTS.length }} code improvements including:
+
+                Generated by LoopStack Refactoring Agent
+              repo_dir: '{{ context.variables.TARGET_DIR }}'
+            as: COMMIT_RESULT
+
+      - name: push_branch
+        from: changes_committed
+        to: branch_pushed
+        call:
+          - tool: create_chat_message
+            arguments:
+              role: assistant
+              content: '🚀 Pushing branch to remote repository...'
+
+          - tool: git_push_tool
+            arguments:
+              branch_name: '{{ context.variables.BRANCH_NAME }}'
+              repo_dir: '{{ context.variables.TARGET_DIR }}'
+            as: PUSH_RESULT
+
+      - name: create_pull_request
+        from: branch_pushed
+        to: end
+        call:
+          - tool: create_chat_message
+            arguments:
+              role: assistant
+              content: '🔃 Creating pull request...'
+
+          - tool: create_pull_request_tool
+            arguments:
+              title: '🤖 AI Code Refactoring: Automated Improvements'
+              description: |
+                ## 🤖 Automated Code Refactoring
+
+                This pull request contains AI-generated code improvements applied by the LoopStack Refactoring Agent.
+
+                ### 📈 Improvements Applied: {{ context.variables.APPROVED_IMPROVEMENTS.length }}
+
+                {{#each context.variables.APPROVED_IMPROVEMENTS}}
+                - **{{ this.file_name }}** (Line {{ this.line_number }}): {{ this.old_text }} → {{ this.new_text }}
+                {{/each}}
+
+                Generated automatically by LoopStack Refactoring Agent
+              branch_name: ${ context.variables.BRANCH_NAME }
+              base_branch: 'main'
+              repo_dir: '{{ context.variables.TARGET_DIR }}'
+            as: PR_RESULT
+
+          - tool: create_chat_message
+            arguments:
+              role: assistant
+              content: |
+                ✅ **Refactoring Pipeline Complete!**
+
+                🌿 **Branch:** `{{ context.variables.BRANCH_NAME }}`
+                📝 **Committed:** {{ context.variables.APPROVED_IMPROVEMENTS.length }} improvements
+                🚀 **Pushed:** Successfully to remote
+                🔃 **Pull Request:** Created and ready for review
+
+                **Next Steps:**
+                1. Review the pull request in your repository
+                2. Approve and merge when ready
+                3. The refactored code will be integrated into the main branch
